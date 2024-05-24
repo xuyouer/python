@@ -15,7 +15,7 @@ python/
 │
 ├── docs/                           # 文档相关资料
 │   ├── guide.md                    # 使用指南
-│   ├── contributing.md             # 贡献
+│   ├── contributing.md             # 贡献指南
 │   └── ...
 │
 ├── src/                            # 源代码
@@ -47,9 +47,9 @@ python/
 
 ## 贡献指南
 
-我们非常欢迎社区的贡献！请先阅读[CONTRIBUTING.md](docs/contributing.md)了解如何参与贡献。
+我们非常欢迎社区的贡献！请先阅读[`CONTRIBUTING.md`](docs/contributing.md)了解如何参与贡献。
 
 ## 版权信息
 
-Copyright © 2024 XuYouer. Licensed under the [GPL-3.0 License](LICENSE).
+Copyright © 2024 XuYouer. Licensed under the [`GPL-3.0 License`](LICENSE).
 
