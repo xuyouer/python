@@ -10,6 +10,7 @@
 
 ## 目录结构
 
+```markdown
 python/
 │
 ├── docs/                           # 文档相关资料
@@ -20,7 +21,7 @@ python/
 ├── src/                            # 源代码
 │   ├── wechat/                     # 微信
 │   │   ├── bill/                   # 账单
-│   │   │   └── 微信交易流水.py       # 读取下载的微信账单, 生成Excel文件
+│   │   │   └── 微信交易流水.py      # 读取下载的微信账单, 生成Excel文件
 │   │   └── ...
 │   └── ...
 │
@@ -29,13 +30,15 @@ python/
 ├── README.md                       # 本文件
 └── ...
 
+```
+
 ## 安装和设置
 
-请参考 `docs/guide.md` 中的详细安装步骤来配置开发环境及项目依赖。
+请参考 [`docs/guide.md`](docs/guide.md) 中的详细安装步骤来配置开发环境及项目依赖。
 
 ## 使用指南
 
-请查阅 `docs/guide.md` 使用指南。
+请查阅 [`docs/guide.md`](docs/guide.md) 使用指南。
 
 ## 技术栈
 
