@@ -1,5 +1,6 @@
 """
 微信交易流水
+    充值/提现/理财通购买/零钱通存取/信用卡还款等交易, 将计入中性交易
 
     pip install pandas
     pip install openpyxl
@@ -8,6 +9,8 @@
 import os
 import csv
 import re
+import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17,7 +20,41 @@ from tkinter.scrolledtext import ScrolledText
 
 import pandas as pd
 
-# 充值/提现/理财通购买/零钱通存取/信用卡还款等交易，将计入中性交易
+
+def check_and_install(packages):
+    """
+    检查给定的Python库是否已安装
+    如果没有安装, 则尝试使用pip自动安装
+
+    :param packages: 要检查和安装的Python库名
+    :return bool: 安装成功返回True, 如果过程中出现错误则返回False
+    """
+    if isinstance(packages, str):  # 如果参数是单个字符串, 则转换为列表
+        packages = [packages]
+
+    for package in packages:
+        try:
+            # 尝试导入库, 如果导入失败则说明未安装
+            __import__(package)
+            print(f"库 {package} 已经安装")
+        except ImportError:
+            print(f"库 {package} 未安装, 正在尝试自动安装...")
+            # 构建pip安装命令
+            install_command = [sys.executable, "-m", "pip", "install", package]
+
+            # 执行pip安装命令
+            try:
+                subprocess.check_call(install_command)
+                print(f"库 {package} 安装成功")
+            except subprocess.CalledProcessError as error:
+                print(f"安装 {package} 时发生错误: {error}")
+
+
+# 初始化
+def initial_package():
+    packages = ['pandas', 'openpyxl']
+    check_and_install(packages)
+
 
 # 用于存储解析后的数据
 data = {
@@ -29,9 +66,11 @@ data = {
 }
 # 存储交易明细列表
 transactions = []
+# 表头行数据
+header = None
 
 
-# 提取 基本信息
+# 提取 微信昵称
 def extract_wechat_nickname(row):
     match = re.search(r'\[(.*?)\]', row[0])
     return match.group(1).strip() if match else '未找到匹配的微信昵称'
@@ -50,66 +89,89 @@ def extract_financial_info(row, key):
                                                                                                    f'{key}总额': 0.0}
 
 
-# 提取 交易明细列表
-def extract_transaction_details(row):
-    # 所有列存在
-    # 去除每列的\t字符
-    row = [col.strip('\t') for col in row]
-    if len(row) >= 10:
-        transaction = {
-            '交易时间': row[0],
-            '交易类型': row[1],
-            '交易对方': row[2],
-            '商品': row[3],
-            '收支类型': row[4],
-            '金额(元)': float(row[5][1:]) if row[5].startswith('¥') else float(row[5]),  # 去除金额前的符号
-            '支付方式': row[6],
-            '当前状态': row[7],
-            '交易单号': row[8],
-            '商户单号': row[9],
-            '备注': row[10] if len(row) > 10 else ""
-        }
-        transactions.append(transaction)
+# 获取交易明细表头行及其列名
+def find_header_row(file_path):
+    global header
+    if header is not None:
+        return header  # 如果表头已找到, 则直接返回
+    with open(file_path, mode='r', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        for i, row in enumerate(reader):
+            if all(col.strip() for col in row):  # 确保这一行非空
+                if '交易时间' in row[0]:  # 或其他能标志明细开始的关键字
+                    header = [col.strip() for col in row]
+                    return header
+    return None
 
 
-# 解析
-def parse_csv_file(file_path):
-    # 标记, 是否跳过基本统计信息
-    header_passed = False
-
+# 提取 基本统计信息
+def extract_basic_info(file_path):
     with open(file_path, mode='r', encoding='utf-8') as file:
         reader = csv.reader(file)
         for row in reader:
-            # 处理基本信息
-            if not header_passed:
-                # 当遇到交易时间列时，表明基本信息结束
-                if row and '交易时间' in row[0]:
-                    header_passed = True
+            # 提取微信昵称
+            if row and '微信昵称：' in row[0]:
+                data['微信昵称'] = extract_wechat_nickname(row)
+            # 提取总笔数
+            elif row and '共' in row[0] and '笔记录' in row[0]:
+                data['总笔数'] += extract_total_transactions(row)
+            # 提取收入信息
+            elif row and '收入：' in row[0]:
+                financial_data = extract_financial_info(row, '收入')
+                data['收入']['笔数'] += financial_data['收入笔数']
+                data['收入']['总额'] += financial_data['收入总额']
+            # 提取支出信息
+            elif row and '支出：' in row[0]:
+                financial_data = extract_financial_info(row, '支出')
+                data['支出']['笔数'] += financial_data['支出笔数']
+                data['支出']['总额'] += financial_data['支出总额']
+            # 提取中性交易信息
+            elif row and '中性交易：' in row[0]:
+                financial_data = extract_financial_info(row, '中性交易')
+                data['中性交易']['笔数'] += financial_data['中性交易笔数']
+                data['中性交易']['总额'] += financial_data['中性交易总额']
+
+
+# 提取 交易明细列表 动态获取表头
+def extract_transaction_details(file_path):
+    global header
+    header = find_header_row(file_path)
+    if header is None:
+        print("交易明细表头未找到")
+        return
+
+    # transactions.clear()  # 清空之前的交易记录
+    with open(file_path, mode='r', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        header_passed = False  # 标记是否开始读取交易明细
+
+        for row in reader:
+            # 当遇到交易时间列时，表明基本信息结束
+            if row and '交易时间' in row[0]:
+                header_passed = True
+                continue  # 跳过此行, 下一行开始读取数据
+
+            if header_passed and header:  # 当找到起始行且表头不为空时开始处理交易明细
+                # if len(row) != len(header):  # 检查行长度与表头长度是否一致，避免格式错误
+                #     continue
+
+                transaction = dict(zip(header, (col.strip() for col in row)))
+
+                # 处理金额字段
+                if '金额(元)' in transaction and transaction['金额(元)'].startswith('¥'):
+                    transaction['金额(元)'] = float(transaction['金额(元)'][1:])
                 else:
-                    # 提取微信昵称
-                    if row and '微信昵称：' in row[0]:
-                        data['微信昵称'] = extract_wechat_nickname(row)
-                    # 提取总笔数
-                    elif row and '共' in row[0] and '笔记录' in row[0]:
-                        data['总笔数'] += extract_total_transactions(row)
-                    # 提取收入信息
-                    elif row and '收入：' in row[0]:
-                        financial_data = extract_financial_info(row, '收入')
-                        data['收入']['笔数'] += financial_data['收入笔数']
-                        data['收入']['总额'] += financial_data['收入总额']
-                    # 提取支出信息
-                    elif row and '支出：' in row[0]:
-                        financial_data = extract_financial_info(row, '支出')
-                        data['支出']['笔数'] += financial_data['支出笔数']
-                        data['支出']['总额'] += financial_data['支出总额']
-                    # 提取中性交易信息
-                    elif row and '中性交易：' in row[0]:
-                        financial_data = extract_financial_info(row, '中性交易')
-                        data['中性交易']['笔数'] += financial_data['中性交易笔数']
-                        data['中性交易']['总额'] += financial_data['中性交易总额']
-            # 处理交易明细列表
-            else:
-                extract_transaction_details(row)
+                    transaction['金额(元)'] = float(transaction['金额(元)']) if transaction['金额(元)'] else 0.0
+
+                transactions.append(transaction)
+
+
+# 调用
+def parse_csv_file(file_path):
+    # 提取 统计信息
+    extract_basic_info(file_path)
+    # 提取 交易明细列表
+    extract_transaction_details(file_path)
 
 
 # 解析 多个csv
@@ -119,6 +181,7 @@ def parse_csv_files(directory_path):
             file_path = os.path.join(directory_path, filename)
             parse_csv_file(file_path)
             print(f"读取 '{file_path}' OK")
+            log_message(f"读取 '{file_path}' OK")
 
 
 # 使用多线程解析CSV文件
@@ -128,7 +191,6 @@ def parse_csv_files_multithreaded(directory_path):
     with ThreadPoolExecutor() as executor:
         executor.map(parse_csv_file, files)
     print("CSV文件读取 OK")
-
     log_message("CSV文件读取 OK")
 
 
@@ -140,7 +202,7 @@ def deduplicate_transactions(transactions):
     return df.to_dict('records')
 
 
-# 将交易记录保存到CSV文件
+# 将交易记录保存到CSV文件 动态获取表头
 def save_transactions_to_csv(transactions, output_dir):
     """
     将交易记录列表保存到指定的CSV文件中
@@ -148,16 +210,17 @@ def save_transactions_to_csv(transactions, output_dir):
     :param transactions: 交易记录的列表
     :param output_dir: 输出的CSV文件路径
     """
-    with open(output_dir, mode='w', newline='', encoding='utf-8-sig') as csvfile:
-        fieldnames = ['交易时间', '交易类型', '交易对方', '商品', '收支类型',
-                      '金额(元)', '支付方式', '当前状态', '交易单号', '商户单号', '备注']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    if header is None:
+        print("交易明细表头未找到")
+        return
 
+    with open(output_dir, mode='w', newline='', encoding='utf-8-sig') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=header)
         writer.writeheader()
         for transaction in transactions:
-            writer.writerow(transaction)
+            # 仅写入存在的列
+            writer.writerow({k: v for k, v in transaction.items() if k in header})
     print(f"交易记录 '{output_dir}' OK")
-
     log_message(f"交易记录 '{output_dir}' OK")
 
 
@@ -172,7 +235,6 @@ def save_transactions_to_excel(transactions, output_dir):
     df = pd.DataFrame(transactions)
     df.to_excel(output_dir, index=False, engine='openpyxl')
     print(f"交易记录 '{output_dir}' OK")
-
     log_message(f"交易记录 '{output_dir}' OK")
 
 
@@ -212,7 +274,6 @@ def post_process_all_files(output_dir='./'):
     global transactions
     transactions = deduplicate_transactions(transactions)
     print("交易记录去重 OK")
-
     log_message("交易记录去重 OK")
 
     nickname = data['微信昵称']
@@ -233,7 +294,6 @@ def post_process_all_files(output_dir='./'):
     reset_data()
 
     print(f"'{nickname}' 的数据 OK")
-
     log_message(f"'{nickname}' 的数据 OK")
 
 
@@ -259,8 +319,8 @@ def reset_data():
 
 def test():
     # CSV文件路径
-    # csv_file_path = '微信支付账单(20230701-20231001).csv'
-    csv_file_paths = './'
+    csv_file_path = '微信支付账单(20230701-20231001).csv'
+    # csv_file_paths = './'
     csv_file_paths = input("请输入CSV文件所在目录的路径（直接回车默认为当前目录）: ")
     csv_file_paths = csv_file_paths if csv_file_paths else './'
     print(f"开始处理目录 '{csv_file_paths}' 下的CSV文件...")
@@ -346,7 +406,7 @@ def log_message(message):
 
 
 # 窗口大小和位置设置
-def window_setup(root, width=500, height=550):
+def window_setup(root, width=600, height=450):
     window_width = width
     window_height = height
     screen_width = root.winfo_screenwidth()
@@ -443,4 +503,5 @@ def main_gui():
 
 
 if __name__ == '__main__':
+    initial_package()
     main_gui()
