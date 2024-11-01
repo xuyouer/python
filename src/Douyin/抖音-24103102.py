@@ -1,6 +1,7 @@
 """
 20241031-02
 抖音视频/图文下载
+搜索
 
     requests
     DrissionPage
@@ -59,6 +60,142 @@ class DouyinVideoDownloader:
             self.driver = uc.Chrome(options=options)
         else:
             self.driver = ChromiumPage()
+
+    def search_users(self, keyword, max_results=10):
+        """
+        搜索用户
+        https://www.douyin.com/search/{keyword}
+        params = { 'type': 'user' }
+        https://www.douyin.com/aweme/v1/web/discover/search/
+        params = { 'keyword': keyword, 'search_channel': 'aweme_user_web', 'offset': (10, 20, 30, 40, ...), 'count': 10 }
+
+        :param keyword: 搜索关键词
+        :param max_results: 最大结果数量
+        :return: 用户列表
+        """
+        try:
+            headers = self.setup_headers()
+            users = []
+            offset = 0
+            count = 10
+
+            while len(users) < max_results:
+                # 设置搜索参数
+                params = {
+                    'keyword': keyword,
+                    'search_channel': 'aweme_user_web',
+                    'offset': offset,
+                    'count': count
+                }
+
+                # 开始监听搜索响应
+                self.driver.listen.start('discover/search/')
+
+                # 构建搜索URL
+                search_url = f'https://www.douyin.com/search/{keyword}?type=user'
+                self.driver.get(search_url)
+
+                try:
+                    # 等待响应
+                    resp = self.driver.listen.wait()
+                    search_data = resp.response.body
+
+                    # 提取用户信息
+                    user_list = search_data.get('user_list', [])
+                    if not user_list:
+                        break
+
+                    for user in user_list:
+                        user_info = user.get('user_info', {})
+                        if user_info:
+                            users.append({
+                                'nickname': user_info.get('nickname', '未知用户'),
+                                'unique_id': user_info.get('unique_id', ''),
+                                'sec_uid': user_info.get('sec_uid', ''),
+                                'uid': user_info.get('uid', ''),
+                                'signature': user_info.get('signature', ''),
+                                'follower_count': user_info.get('follower_count', 0),  # 粉丝
+                                'total_favorited': user_info.get('total_favorited', 0),  # 获赞
+                            })
+
+                        if len(users) >= max_results:
+                            break
+
+                    # 更新offset继续搜索
+                    offset += count
+
+                    # 如果没有更多结果, 退出循环
+                    if len(user_list) < count:
+                        break
+
+                except Exception as e:
+                    print(f"处理搜索结果时出错: {e}")
+                    break
+
+            return users
+
+        except Exception as e:
+            print(f"搜索用户时发生错误: {e}")
+            return []
+
+    def get_user_videos_by_search(self, keyword):
+        """
+        通过搜索获取用户视频
+
+        :param keyword: 用户关键词
+        :return: 下载成功为True, 反之False
+        """
+        try:
+            # 搜索用户
+            users = self.search_users(keyword, max_results=10)
+            if not users:
+                print(f"未找到与 '{keyword}' 相关的用户")
+                return False
+
+            # 显示搜索结果
+            print(f"\n找到 {len(users)} 个相关用户:")
+            for i, user in enumerate(users, 1):
+                print(f"\n{i}. 用户名: {user['nickname']}")
+                print(f"\t抖音号: {user['unique_id'] or '未设置'}")
+                print(f"\t简介: {user['signature'] or '暂无简介'}")
+                print(f"\t粉丝数: {user['follower_count']}")
+                print(f"\t获赞数: {user['total_favorited']}")
+
+            # 用户选择
+            while True:
+                try:
+                    choice = input("\n请输入要下载的用户编号 (1-{}, 输入0返回): ".format(len(users))).strip()
+
+                    # 检查是否要返回
+                    if choice == '0':
+                        print("返回主菜单")
+                        return False
+
+                    # 转换并验证输入
+                    choice = int(choice)
+                    if 1 <= choice <= len(users):
+                        selected_user = users[choice - 1]
+                        break
+                    else:
+                        print(f"请输入1-{len(users)}之间的数字")
+                except ValueError:
+                    print("请输入有效的数字")
+
+            # 确认下载
+            print(f"\n即将下载用户 {selected_user['nickname']} 的视频")
+            confirm = input("是否继续? (y/n): ").strip().lower()
+            if confirm != 'y':
+                print("取消下载")
+                return False
+
+            # 构建用户主页URL并下载
+            self.url = f"https://www.douyin.com/user/{selected_user['sec_uid']}"
+            self.download_videos()
+            return True
+
+        except Exception as e:
+            print(f"获取用户视频时发生错误: {e}")
+            return False
 
     def get_user_info(self):
         """
@@ -280,46 +417,71 @@ def main():
     """
     print("欢迎使用抖音视频/图文下载器-谷歌版")
     print("请确保您已安装 Google Chrome, 等待下载中请勿关闭浏览器")
-    print("请输入抖音链接(输入0退出): ")
+    print("请选择操作方式:")
+    print("1. 输入抖音链接下载")
+    print("2. 搜索用户下载")
+    print("0. 退出")
 
     while True:
         try:
-            url = input().strip()
+            choice = input("请输入选择 (0-2): ").strip()
 
-            # 检查是否退出
-            if url == '0':
+            if choice == '0':
                 print("感谢使用, 再见")
                 break
 
-            # 检查URL是否为空
-            if not url:
-                print("URL不能为空, 请重新输入(输入0退出): ")
+            elif choice == '1':
+                print("请输入抖音链接: ")
+                url = input().strip()
+
+                if not url:
+                    print("URL不能为空")
+                    continue
+
+                # 检查是否是有效的抖音URL
+                # if 'douyin.com' not in url.lower():
+                #     print("请输入有效的抖音链接(输入0退出): ")
+                #     continue
+
+                # 创建下载器实例并下载视频
+                try:
+                    downloader = DouyinVideoDownloader(url=url)
+                    downloader.download_videos()
+                finally:
+                    if downloader:
+                        del downloader
+
+            elif choice == '2':
+                print("请输入要搜索的用户名或关键词: ")
+                keyword = input().strip()
+
+                if not keyword:
+                    print("关键词不能为空")
+                    continue
+
+                # 创建下载器实例并下载视频
+                try:
+                    downloader = DouyinVideoDownloader()
+                    downloader.get_user_videos_by_search(keyword)
+                finally:
+                    if downloader:
+                        del downloader
+
+            else:
+                print("无效的选择，请重新输入")
                 continue
 
-            # 检查是否是有效的抖音URL
-            # if 'douyin.com' not in url.lower():
-            #     print("请输入有效的抖音链接(输入0退出): ")
-            #     continue
-
-            # 创建下载器实例并下载视频
-            try:
-                downloader = DouyinVideoDownloader(url=url)
-                downloader.download_videos()
-            except Exception as e:
-                print(f"下载过程中发生错误: {e}")
-            finally:
-                # 确保资源被正确释放
-                if downloader:
-                    del downloader
-
-            print("\n继续下载其他视频? 请输入抖音链接(输入0退出): ")
+            print("\n是否继续? 请选择操作方式:")
+            print("1. 输入抖音链接下载")
+            print("2. 搜索用户下载")
+            print("0. 退出")
 
         except KeyboardInterrupt:
             print("\n检测到退出指令, 正在安全退出...")
             break
         except Exception as e:
             print(f"发生未知错误: {e}")
-            print("请重新输入抖音链接(输入0退出): ")
+            continue
 
 
 if __name__ == '__main__':
